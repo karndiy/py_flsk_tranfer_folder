@@ -1,0 +1,105 @@
+# =============================
+# app.py
+# =============================
+from flask import Flask, request, abort, jsonify, render_template
+from pathlib import Path
+import tempfile
+import zipfile
+import os
+
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-key")
+
+
+BASE_DIR = Path(__file__).parent.resolve()
+UPLOAD_ROOT = (BASE_DIR / "storage").resolve()
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+# ---------- Helpers ----------
+
+
+def _safe_path(relpath: str) -> Path:
+    """Resolve a user-supplied relative path safely under UPLOAD_ROOT."""
+    if not relpath:
+        return UPLOAD_ROOT
+
+    p = (UPLOAD_ROOT / relpath).resolve()
+    if UPLOAD_ROOT == p or UPLOAD_ROOT in p.parents:
+        return p
+
+    abort(400, description="Invalid path")
+
+
+def _zip_folder_to_temp(folder: Path) -> Path:
+    """Zip a folder into a temporary .zip file and return the temp path."""
+    if not folder.exists() or not folder.is_dir():
+        abort(404, description="Folder not found")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp.close()
+
+    with zipfile.ZipFile(tmp.name, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(folder):
+            for filename in files:
+                full_path = Path(root) / filename
+                arcname = full_path.relative_to(folder)
+                zf.write(full_path, arcname)
+
+    return Path(tmp.name)
+
+
+def _extract_zip_to_folder(zip_path: Path, dest_folder: Path):
+    dest_folder.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_folder)
+
+
+# ---------- Routes ----------
+
+
+@app.get("/")
+def index():
+    return render_template("index.html")
+
+
+@app.post("/upload_folder")
+def upload_folder():
+    """Directly upload an entire folder (via webkitdirectory) preserving structure."""
+    target = request.form.get("target", "").strip()
+    current = request.form.get("current", "").strip()
+
+    # Base destination is current directory
+    dest_root = _safe_path(str(Path(current) / target)) if target else _safe_path(current)
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    files = request.files.getlist("files")
+    paths = request.form.getlist("paths")
+    if not files or not paths or len(files) != len(paths):
+        abort(400, description="Missing files or paths")
+
+    saved = 0
+    for upload, rel in zip(files, paths):
+        rel_path = Path(rel).as_posix().lstrip("/")
+        if ".." in Path(rel_path).parts:
+            abort(400, description="Invalid relative path")
+
+        out_path = (dest_root / rel_path).resolve()
+        if not (out_path == UPLOAD_ROOT or UPLOAD_ROOT in out_path.parents):
+            abort(400, description="Path escape blocked")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        upload.save(out_path)
+        saved += 1
+
+    return jsonify({
+        "status": "ok",
+        "saved": saved,
+        "target": str(dest_root.relative_to(UPLOAD_ROOT)) if dest_root != UPLOAD_ROOT else "",
+    })
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5002)))

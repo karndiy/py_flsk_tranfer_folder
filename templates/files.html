@@ -1,0 +1,320 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Uploaded Files</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            color-scheme: light dark;
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #f5f5f5;
+            color: #111;
+        }
+        main {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 48px 24px 64px;
+        }
+        header {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 32px;
+        }
+        nav {
+            display: flex;
+            gap: 12px;
+        }
+        nav a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border-radius: 10px;
+            background: #111827;
+            color: #fff;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        nav a.secondary {
+            background: #e5e7eb;
+            color: #111827;
+        }
+        section {
+            background: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 35px -24px rgba(15, 23, 42, 0.45);
+        }
+        .breadcrumbs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        .breadcrumbs a {
+            text-decoration: none;
+            color: #2563eb;
+        }
+        .breadcrumbs span {
+            color: #6b7280;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        thead {
+            text-align: left;
+            color: #4b5563;
+        }
+        th, td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        tr:hover {
+            background-color: #f1f5f9;
+        }
+        tr.selected {
+            background-color: #dbeafe;
+        }
+        .type-pill {
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            background: #e5e7eb;
+            color: #111827;
+        }
+        .type-folder {
+            background: #c7d2fe;
+            color: #1e3a8a;
+        }
+        .details-card {
+            margin-top: 24px;
+            background: #f9fafb;
+            border-radius: 12px;
+            padding: 20px;
+            display: grid;
+            gap: 12px;
+        }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 16px;
+        }
+        .details-grid div {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .details-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: #6b7280;
+            letter-spacing: 0.08em;
+            font-weight: 600;
+        }
+        .details-value {
+            font-size: 15px;
+            color: #111827;
+            word-break: break-all;
+        }
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .actions a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 16px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .actions a.primary {
+            background: #111827;
+            color: #fff;
+        }
+        .actions a.secondary {
+            background: #e5e7eb;
+            color: #111827;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 48px 16px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>Uploaded Files</h1>
+        <p style="margin: 0; color: #4b5563;">Browse every file and folder in the storage area. Select an item to inspect metadata or download it instantly.</p>
+        <nav>
+            <a href="/">⬆ Upload Another Folder</a>
+            <a class="secondary" href="/files">🔁 Refresh</a>
+        </nav>
+    </header>
+
+    <section>
+        <div class="breadcrumbs">
+            {% for crumb in breadcrumbs %}
+                {% if not loop.first %}<span>/</span>{% endif %}
+                {% if loop.last %}
+                    <span>{{ crumb.name }}</span>
+                {% else %}
+                    <a href="{{ url_for('files_page') }}{% if crumb.path %}?path={{ crumb.path | urlencode }}{% endif %}">{{ crumb.name }}</a>
+                {% endif %}
+            {% endfor %}
+        </div>
+
+        {% if entries %}
+        <div style="overflow-x: auto;">
+            <table id="filesTable">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Modified</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in entries %}
+                    <tr class="file-row" data-name="{{ entry.name }}" data-path="{{ entry.path }}" data-type="{{ entry.type_label }}" data-size="{{ entry.size_human }}" data-modified="{{ entry.modified_label }}" data-download="{{ entry.download_url }}" data-is-dir="{{ '1' if entry.is_dir else '0' }}" data-browse="{% if entry.is_dir %}{{ url_for('files_page') }}{% if entry.path %}?path={{ entry.path | urlencode }}{% endif %}{% endif %}">
+                        <td>
+                            {% if entry.is_dir %}
+                                <a href="{{ url_for('files_page') }}{% if entry.path %}?path={{ entry.path | urlencode }}{% endif %}" style="text-decoration: none; color: #111827; font-weight: 600;">📁 {{ entry.name }}</a>
+                            {% else %}
+                                <span style="font-weight: 500;">📄 {{ entry.name }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="type-pill {% if entry.is_dir %}type-folder{% endif %}">{{ entry.type_label }}</span>
+                        </td>
+                        <td>{{ entry.size_human }}</td>
+                        <td>{{ entry.modified_label }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="details-card" id="detailsCard" hidden>
+            <div>
+                <h2 style="margin: 0; font-size: 20px;" id="detailName"></h2>
+                <p style="margin: 4px 0 0; color: #6b7280;" id="detailPath"></p>
+            </div>
+            <div class="details-grid">
+                <div>
+                    <span class="details-label">Type</span>
+                    <span class="details-value" id="detailType"></span>
+                </div>
+                <div>
+                    <span class="details-label">Size</span>
+                    <span class="details-value" id="detailSize"></span>
+                </div>
+                <div>
+                    <span class="details-label">Last Modified</span>
+                    <span class="details-value" id="detailModified"></span>
+                </div>
+            </div>
+            <div class="actions">
+                <a class="primary" id="downloadLink" href="#" download>⬇ Download</a>
+                <a class="secondary" id="openLink" href="#">📂 Open Folder</a>
+            </div>
+        </div>
+        {% else %}
+            <div class="empty-state">
+                <p>No files yet. Upload a folder from the main page to populate storage.</p>
+            </div>
+        {% endif %}
+    </section>
+</main>
+
+<script>
+(function () {
+    const rows = Array.from(document.querySelectorAll('.file-row'));
+    const detailsCard = document.getElementById('detailsCard');
+    const detailName = document.getElementById('detailName');
+    const detailPath = document.getElementById('detailPath');
+    const detailType = document.getElementById('detailType');
+    const detailSize = document.getElementById('detailSize');
+    const detailModified = document.getElementById('detailModified');
+    const downloadLink = document.getElementById('downloadLink');
+    const openLink = document.getElementById('openLink');
+
+    if (!rows.length) {
+        return;
+    }
+
+    function selectRow(row) {
+        rows.forEach(r => r.classList.toggle('selected', r === row));
+        const name = row.dataset.name;
+        const path = row.dataset.path || '(root)';
+        const type = row.dataset.type;
+        const size = row.dataset.size;
+        const modified = row.dataset.modified;
+        const downloadUrl = row.dataset.download;
+        const isDir = row.dataset.isDir === '1';
+        const browseUrl = row.dataset.browse;
+
+        detailName.textContent = name;
+        detailPath.textContent = path || 'storage/';
+        detailType.textContent = type;
+        detailSize.textContent = size;
+        detailModified.textContent = modified;
+        downloadLink.href = downloadUrl || '#';
+        if (downloadUrl) {
+            downloadLink.setAttribute('download', name);
+        } else {
+            downloadLink.removeAttribute('download');
+        }
+        downloadLink.style.display = downloadUrl ? 'inline-flex' : 'none';
+
+        if (isDir && browseUrl) {
+            openLink.href = browseUrl;
+            openLink.style.display = 'inline-flex';
+        } else {
+            const parts = path.split('/');
+            parts.pop();
+            if (parts.length) {
+                openLink.href = `${window.location.pathname}?path=${encodeURIComponent(parts.join('/'))}`;
+                openLink.style.display = 'inline-flex';
+            } else {
+                openLink.href = window.location.pathname;
+                openLink.style.display = 'inline-flex';
+            }
+        }
+
+        detailsCard.hidden = false;
+    }
+
+    rows.forEach(row => {
+        row.addEventListener('click', () => selectRow(row));
+    });
+
+    selectRow(rows[0]);
+})();
+</script>
+</body>
+</html>

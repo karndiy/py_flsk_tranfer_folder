@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flask Folder Transfer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+    color-scheme: light dark;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: #f5f5f5;
+    color: #111;
+}
+main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 64px;
+}
+section {
+    background: #fff;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 20px 35px -24px rgba(15, 23, 42, 0.45);
+}
+label {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: #1f2937;
+}
+input[type="text"],
+input[type="file"] {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #d1d5db;
+    font-size: 15px;
+    box-sizing: border-box;
+}
+button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: #111827;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-weight: 600;
+    cursor: pointer;
+}
+button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+progress {
+    appearance: none;
+    width: 100%;
+    height: 14px;
+    border-radius: 10px;
+    overflow: hidden;
+    background-color: #e5e7eb;
+}
+progress::-webkit-progress-bar {
+    background-color: #e5e7eb;
+}
+progress::-webkit-progress-value {
+    background-color: #111827;
+}
+progress::-moz-progress-bar {
+    background-color: #111827;
+}
+#status {
+    margin-top: 16px;
+    font-size: 14px;
+    min-height: 18px;
+}
+.success {
+    color: #065f46;
+}
+.error {
+    color: #b91c1c;
+}
+code {
+    background: #111827;
+    color: #f9fafb;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 0.85em;
+}
+.small-text {
+    font-size: 13px;
+    color: #4b5563;
+}
+</style>
+</head>
+<body>
+<main>
+<header style="margin-bottom: 32px;">
+<h1 style="margin: 0; font-size: 28px;">Folder Uploader</h1>
+<p style="margin: 6px 0 0; color: #4b5563;">Select a folder from your machine and send it to the Flask server, preserving its structure.</p>
+<nav style="margin-top: 12px; display: flex; gap: 12px;">
+  <a href="/files" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 14px; border-radius: 10px; background: #111827; color: #fff; text-decoration: none; font-size: 14px; font-weight: 600;">📁 List Files</a>
+</nav>
+</header>
+<section>
+<form id="folderForm">
+<div style="display: grid; gap: 16px;">
+<div>
+<label for="currentPath">Current folder on server (relative to storage)</label>
+<input id="currentPath" name="current" type="text" placeholder="Leave empty for the storage root" />
+</div>
+<div>
+<label for="targetPath">Optional subfolder name to create inside current</label>
+<input id="targetPath" name="target" type="text" placeholder="e.g. uploads/project-a" />
+</div>
+<div>
+<label for="folderInput">Folder to upload</label>
+<input id="folderInput" name="folder" type="file" webkitdirectory directory multiple required />
+<p class="small-text">The browser will include each file's relative path automatically when you pick a folder.</p>
+</div>
+<div style="display: flex; align-items: center; gap: 12px;">
+<button id="submitButton" type="submit">Upload Folder</button>
+<button type="button" id="resetButton" style="background: transparent; color: #111827; border: 1px solid #d1d5db;">Reset</button>
+</div>
+</div>
+</form>
+<div id="progressWrapper" style="display: none; margin-top: 18px;">
+<progress id="progressBar" value="0" max="100"></progress>
+<div id="progressPercent" class="small-text" style="margin-top: 6px;">0%</div>
+<div id="progressDetails" class="small-text" style="margin-top: 4px;"></div>
+</div>
+<div id="status"></div>
+<div id="summary" style="margin-top: 20px; font-size: 14px; color: #1f2937;"></div>
+</section>
+</main>
+<script>
+const form = document.getElementById('folderForm');
+const folderInput = document.getElementById('folderInput');
+const currentPath = document.getElementById('currentPath');
+const targetPath = document.getElementById('targetPath');
+const statusEl = document.getElementById('status');
+const submitButton = document.getElementById('submitButton');
+const resetButton = document.getElementById('resetButton');
+const summaryEl = document.getElementById('summary');
+const progressWrapper = document.getElementById('progressWrapper');
+const progressBar = document.getElementById('progressBar');
+const progressPercent = document.getElementById('progressPercent');
+const progressDetails = document.getElementById('progressDetails');
+
+function setStatus(message, isError = false) {
+    statusEl.textContent = message;
+    statusEl.className = isError ? 'error' : 'success';
+}
+
+function resetProgress() {
+    progressBar.value = 0;
+    progressPercent.textContent = '0%';
+    progressDetails.textContent = '';
+    progressWrapper.style.display = 'none';
+}
+
+function clearSummary() {
+    summaryEl.textContent = '';
+}
+
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+        return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let index = 0;
+    let value = bytes;
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+    }
+    const decimals = index === 0 ? 0 : 1;
+    return `${value.toFixed(decimals)} ${units[index]}`;
+}
+
+function formatDuration(ms) {
+    if (!Number.isFinite(ms) || ms < 0) {
+        return '0s';
+    }
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+}
+
+function formatSpeed(bytesPerSecond) {
+    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+        return '0 B/s';
+    }
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+    let index = 0;
+    let value = bytesPerSecond;
+    while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+    }
+    const decimals = index === 0 ? 0 : 1;
+    return `${value.toFixed(decimals)} ${units[index]}`;
+}
+
+resetButton.addEventListener('click', () => {
+    form.reset();
+    folderInput.value = '';
+    setStatus('');
+    clearSummary();
+    resetProgress();
+});
+
+form.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    if (!folderInput.files || folderInput.files.length === 0) {
+        setStatus('Pick a folder to upload.', true);
+        return;
+    }
+
+    const files = Array.from(folderInput.files);
+    const totalFiles = files.length;
+    const totalBytes = files.reduce((acc, file) => acc + file.size, 0);
+
+    const formData = new FormData();
+    formData.append('current', currentPath.value.trim());
+    formData.append('target', targetPath.value.trim());
+
+    for (const file of files) {
+        const relPath = file.webkitRelativePath || file.name;
+        formData.append('files', file, file.name);
+        formData.append('paths', relPath);
+    }
+
+    submitButton.disabled = true;
+    setStatus(`Preparing ${totalFiles} files (${formatBytes(totalBytes)})...`);
+    clearSummary();
+    progressWrapper.style.display = 'block';
+    progressBar.value = 0;
+    progressPercent.textContent = '0%';
+    progressDetails.textContent = `0 of ${totalFiles} files | 0 B of ${formatBytes(totalBytes)} | Speed 0 B/s | Elapsed 0s | ETA calculating...`;
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload_folder');
+
+    const startedAt = performance.now();
+
+    xhr.upload.onprogress = (event) => {
+        const elapsedMs = performance.now() - startedAt;
+        const loadedBytes = event.loaded;
+        const speed = elapsedMs > 0 ? loadedBytes / (elapsedMs / 1000) : 0;
+        const remainingBytes = Math.max(0, totalBytes - loadedBytes);
+        const etaMs = speed > 0 ? (remainingBytes / speed) * 1000 : null;
+
+        if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            progressBar.value = percent;
+            progressPercent.textContent = `${percent}%`;
+        } else {
+            progressPercent.textContent = 'Uploading...';
+        }
+
+        const estimatedFiles = totalBytes > 0 ? Math.min(totalFiles, Math.ceil((loadedBytes / totalBytes) * totalFiles)) : 0;
+        const etaLabel = etaMs !== null ? formatDuration(etaMs) : 'calculating...';
+        progressDetails.textContent = `${estimatedFiles} of ${totalFiles} files | ${formatBytes(loadedBytes)} of ${formatBytes(totalBytes)} | Speed ${formatSpeed(speed)} | Elapsed ${formatDuration(elapsedMs)} | ETA ${etaLabel}`;
+    };
+
+    xhr.onload = () => {
+        submitButton.disabled = false;
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+                const payload = JSON.parse(xhr.responseText);
+                setStatus(`Uploaded ${payload.saved} files successfully.`);
+                const targetDescription = payload.target ? `storage/${payload.target}` : 'storage/';
+                const serverDurationMs = Number(payload.duration) * 1000;
+                const serverBytes = Number(payload.bytes);
+                const averageSpeed = serverDurationMs > 0 ? formatSpeed(serverBytes / (serverDurationMs / 1000)) : '0 B/s';
+                progressBar.value = 100;
+                progressPercent.textContent = '100%';
+                const elapsed = performance.now() - startedAt;
+                progressDetails.textContent = `${payload.saved} of ${totalFiles} files | ${formatBytes(serverBytes)} of ${formatBytes(totalBytes)} | Speed ${averageSpeed} | Elapsed ${formatDuration(elapsed)}`;
+                summaryEl.innerHTML = `Files saved under <code>${targetDescription}</code>.<br>Total transferred: ${formatBytes(serverBytes)} in ${formatDuration(serverDurationMs)} (avg ${averageSpeed}).`;
+            } catch (error) {
+                console.error(error);
+                setStatus('Upload finished but response could not be parsed.', true);
+            }
+        } else {
+            setStatus(xhr.responseText || `Upload failed with status ${xhr.status}.`, true);
+        }
+    };
+
+    xhr.onerror = () => {
+        submitButton.disabled = false;
+        setStatus('Upload failed due to a network error.', true);
+    };
+
+    xhr.onabort = () => {
+        submitButton.disabled = false;
+        setStatus('Upload was cancelled.', true);
+    };
+
+    xhr.send(formData);
+});
+</script>
+</body>
+</html>
