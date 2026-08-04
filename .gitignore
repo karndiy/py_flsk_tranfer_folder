@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.whl
+*.egg-info/
+.eggs/
+venv/
+.venv/
+ENV/
+env/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+*.log
+
+# Flask runtime files
+upload_log.jsonl
+tmp_uploads/
+tmp_download.zip
+
+# OS
+.DS_Store
+Thumbs.db

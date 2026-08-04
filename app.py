@@ -9,8 +9,10 @@ import os
 import time
 import json
 import threading
+import shutil
 from typing import IO
 from urllib.parse import quote
+import io
 
 
 STREAM_CHUNK_SIZE = 8 * 1024 * 1024
@@ -222,6 +224,171 @@ def _list_directory(folder: Path) -> list[dict]:
 
     entries.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
     return entries
+
+
+@app.post("/delete")
+def delete_items():
+    """Delete files or folders under the upload root.
+
+    Expects JSON body: { "paths": ["relative/path/one", "file.txt"] }
+    Paths are validated and constrained to `storage/`.
+    """
+    try:
+        payload = request.get_json(force=True)
+    except Exception:
+        abort(400, description="Invalid JSON payload")
+
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not paths or not isinstance(paths, list):
+        abort(400, description="Missing or invalid 'paths' list")
+
+    deleted = []
+    errors = []
+    for rel in paths:
+        if not isinstance(rel, str):
+            errors.append({"path": str(rel), "error": "invalid path"})
+            continue
+
+        # normalize and validate
+        candidate = _safe_path(rel.strip())
+        # don't allow deleting the upload root itself
+        if candidate == UPLOAD_ROOT:
+            errors.append({"path": _relative_to_upload_root(candidate), "error": "cannot delete root"})
+            continue
+
+        try:
+            if candidate.is_dir():
+                shutil.rmtree(candidate)
+            else:
+                candidate.unlink()
+            deleted.append(_relative_to_upload_root(candidate))
+        except FileNotFoundError:
+            errors.append({"path": _relative_to_upload_root(candidate), "error": "not found"})
+        except Exception as exc:
+            errors.append({"path": _relative_to_upload_root(candidate), "error": str(exc)})
+
+    _log_upload({
+        "kind": "delete",
+        "deleted_count": len(deleted),
+        "deleted": deleted,
+        "errors": errors,
+    })
+
+    return jsonify({
+        "status": "ok",
+        "deleted": deleted,
+        "errors": errors,
+    })
+
+
+
+@app.post("/download")
+def download_items():
+    """Create and return a ZIP for one or more selected files/folders.
+
+    Expects JSON body: { "paths": ["relative/path/one", "file.txt"] }
+    """
+    try:
+        payload = request.get_json(force=True)
+    except Exception:
+        abort(400, description="Invalid JSON payload")
+
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not paths or not isinstance(paths, list):
+        abort(400, description="Missing or invalid 'paths' list")
+
+    # Normalize and validate candidates
+    candidates: list[Path] = []
+    for rel in paths:
+        if not isinstance(rel, str):
+            continue
+        p = _safe_path(rel.strip())
+        if not p.exists():
+            continue
+        candidates.append(p)
+
+    if not candidates:
+        abort(400, description="No valid paths to download")
+
+    # Single file or single folder optimization: stream directly
+    if len(candidates) == 1:
+        single = candidates[0]
+        if single.is_file():
+            return send_file(
+                single,
+                as_attachment=True,
+                download_name=single.name,
+                max_age=0,
+                conditional=True,
+                last_modified=None,
+            )
+        # for a single folder, zip and return
+
+    # Create a temp zip containing all selected items
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ARCHIVE_SUFFIX, dir=TEMP_UPLOAD_ROOT)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+
+    file_count = 0
+    source_bytes = 0
+    with zipfile.ZipFile(tmp_path, "w", allowZip64=True, **ZIP_WRITE_KWARGS) as zf:
+        for cand in candidates:
+            if cand.is_dir():
+                for root, _, files in os.walk(cand):
+                    for fname in files:
+                        full = Path(root) / fname
+                        try:
+                            resolved = full.resolve()
+                        except OSError:
+                            continue
+                        # ensure inside upload root
+                        try:
+                            _ensure_within_upload_root(resolved)
+                        except Exception:
+                            continue
+                        try:
+                            arcname = resolved.relative_to(UPLOAD_ROOT)
+                        except Exception:
+                            continue
+                        zf.write(resolved, arcname.as_posix())
+                        file_count += 1
+                        try:
+                            source_bytes += resolved.stat().st_size
+                        except OSError:
+                            pass
+            else:
+                try:
+                    resolved = cand.resolve()
+                except OSError:
+                    continue
+                try:
+                    _ensure_within_upload_root(resolved)
+                except Exception:
+                    continue
+                try:
+                    arcname = resolved.relative_to(UPLOAD_ROOT)
+                except Exception:
+                    continue
+                zf.write(resolved, arcname.as_posix())
+                file_count += 1
+                try:
+                    source_bytes += resolved.stat().st_size
+                except OSError:
+                    pass
+
+    response = send_file(
+        tmp_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="selection.zip",
+        max_age=0,
+        conditional=False,
+        last_modified=None,
+    )
+    response.headers["X-Archive-Files"] = str(file_count)
+    response.headers["X-Archive-Source-Bytes"] = str(source_bytes)
+    response.call_on_close(lambda path=tmp_path: _cleanup_temp_file(path))
+    return response
 
 
 # ---------- Routes ----------

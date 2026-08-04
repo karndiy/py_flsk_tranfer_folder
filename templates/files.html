@@ -192,16 +192,18 @@
             <table id="filesTable">
                 <thead>
                     <tr>
-                        <th>Name</th>
-                        <th>Type</th>
-                        <th>Size</th>
-                        <th>Modified</th>
+                                <th style="width:38px"><input id="selectAll" type="checkbox" aria-label="Select all"></th>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Size</th>
+                                <th>Modified</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for entry in entries %}
-                    <tr class="file-row" data-name="{{ entry.name }}" data-path="{{ entry.path }}" data-type="{{ entry.type_label }}" data-size="{{ entry.size_human }}" data-modified="{{ entry.modified_label }}" data-download="{{ entry.download_url }}" data-is-dir="{{ '1' if entry.is_dir else '0' }}" data-browse="{% if entry.is_dir %}{{ url_for('files_page') }}{% if entry.path %}?path={{ entry.path | urlencode }}{% endif %}{% endif %}">
-                        <td>
+                            <tr class="file-row" data-name="{{ entry.name }}" data-path="{{ entry.path }}" data-type="{{ entry.type_label }}" data-size="{{ entry.size_human }}" data-modified="{{ entry.modified_label }}" data-download="{{ entry.download_url }}" data-is-dir="{{ '1' if entry.is_dir else '0' }}" data-browse="{% if entry.is_dir %}{{ url_for('files_page') }}{% if entry.path %}?path={{ entry.path | urlencode }}{% endif %}{% endif %}">
+                                <td><input class="rowCheckbox" type="checkbox" data-path="{{ entry.path }}" aria-label="Select {{ entry.name }}"></td>
+                                <td>
                             {% if entry.is_dir %}
                                 <a href="{{ url_for('files_page') }}{% if entry.path %}?path={{ entry.path | urlencode }}{% endif %}" style="text-decoration: none; color: #111827; font-weight: 600;">📁 {{ entry.name }}</a>
                             {% else %}
@@ -241,6 +243,8 @@
             <div class="actions">
                 <a class="primary" id="downloadLink" href="#" download>⬇ Download</a>
                 <a class="secondary" id="openLink" href="#">📂 Open Folder</a>
+                <button class="primary" id="downloadSelected">⬇️ Download Selected</button>
+                <button class="secondary" id="deleteSelected">🗑️ Delete Selected</button>
             </div>
         </div>
         {% else %}
@@ -314,6 +318,91 @@
     });
 
     selectRow(rows[0]);
+    
+    // Selection and delete logic
+    const selectAll = document.getElementById('selectAll');
+    const checkboxes = Array.from(document.querySelectorAll('.rowCheckbox'));
+    const deleteBtn = document.getElementById('deleteSelected');
+
+    function updateSelectAll() {
+        const checked = checkboxes.filter(c => c.checked).length;
+        selectAll.checked = checked && checked === checkboxes.length;
+        selectAll.indeterminate = checked > 0 && checked < checkboxes.length;
+    }
+
+    selectAll.addEventListener('change', () => {
+        checkboxes.forEach(c => c.checked = selectAll.checked);
+        updateSelectAll();
+    });
+
+    checkboxes.forEach(cb => cb.addEventListener('change', updateSelectAll));
+
+    deleteBtn.addEventListener('click', async (ev) => {
+        const toDelete = checkboxes.filter(c => c.checked).map(c => c.dataset.path).filter(Boolean);
+        if (!toDelete.length) {
+            alert('No items selected');
+            return;
+        }
+        if (!confirm(`Delete ${toDelete.length} selected item(s)? This cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths: toDelete }),
+            });
+            const data = await res.json();
+            if (res.ok && data && data.status === 'ok') {
+                // reload to reflect changes
+                window.location.reload();
+            } else {
+                alert('Delete failed: ' + (data && data.errors ? JSON.stringify(data.errors) : res.statusText));
+            }
+        } catch (err) {
+            alert('Delete request failed: ' + err);
+        }
+    });
+
+    const downloadBtn = document.getElementById('downloadSelected');
+    downloadBtn.addEventListener('click', async (ev) => {
+        const toDownload = checkboxes.filter(c => c.checked).map(c => c.dataset.path).filter(Boolean);
+        if (!toDownload.length) {
+            alert('No items selected');
+            return;
+        }
+
+        try {
+            const res = await fetch('/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ paths: toDownload }),
+            });
+            if (!res.ok) {
+                const err = await res.text();
+                alert('Download failed: ' + err);
+                return;
+            }
+            const blob = await res.blob();
+            let filename = 'selection.zip';
+            const cd = res.headers.get('Content-Disposition') || res.headers.get('content-disposition');
+            if (cd) {
+                const m = cd.match(/filename\*=UTF-8''([^;\n\r]+)/i) || cd.match(/filename="?([^";\n\r]+)"?/i);
+                if (m) filename = decodeURIComponent(m[1]);
+            }
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            alert('Download request failed: ' + err);
+        }
+    });
 })();
 </script>
 </body>
